@@ -1,0 +1,141 @@
+---
+title: "10202022_naive_simulation_figure"
+author: "Dongyuan Song"
+date: "2022-10-20"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(countsplit)
+library(cowplot)
+library(ggpubr)
+theme_set(theme_bw())
+```
+
+```{r}
+simu_ind_poisson <- readRDS(file = "~/ClusterDE/data/naive_simulation/simu_ind_poisson.rds")
+
+simu_hpos_poisson <- readRDS(file = "~/ClusterDE/data/naive_simulation/simu_hpos_poisson.rds")
+```
+
+### UMAP Visualization
+```{r}
+count_mat_ind_poisson <- t(simu_ind_poisson[[1]])
+count_mat_hpos_poisson <- t(simu_hpos_poisson[[1]])
+```
+
+```{r}
+corr_ind_poisson <- cor(count_mat_ind_poisson, method = "spearman")
+corr_hpos_poisson <- cor(count_mat_hpos_poisson, method = "spearman")
+```
+
+```{r}
+corr_list <- list(corr_ind_poisson, corr_hpos_poisson)
+names(corr_list) <- c("gene-gene ind", "half gene-gene cor")
+cor_melted <- lapply(corr_list, reshape2::melt)
+names(cor_melted) <- c("gene-gene ind", "half gene-gene cor")
+cor_dat <- Reduce(rbind, cor_melted)
+
+  cor_dat$Method <- Reduce(c, lapply(c("gene-gene ind", "half gene-gene cor"), function(x){
+    rep(x, nrow(cor_melted[[x]]))
+  }))
+cor_dat$Method <- factor(cor_dat$Method, levels = c("gene-gene ind", "half gene-gene cor"))
+```
+
+```{r}
+corr_p <- cor_dat %>% dplyr::mutate(Method = as.character(Method))  %>% ggplot(aes(x = Var2, y = Var1, fill = value))+
+      facet_wrap(~Method, nrow = 1) + #, labeller = label_parsed
+      geom_tile() +
+      scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                           midpoint = 0, limit = c(-1,1), space = "Lab", 
+                           name="Spearman Correlation") + theme_bw() +
+      theme(legend.position = "right",
+            axis.text.x = element_blank(),
+            axis.ticks.x = element_blank(),
+            axis.text.y = element_blank(),
+            axis.ticks.y = element_blank())+
+            #strip.text = element_text(size=24),
+            #legend.text = element_text(size=15),
+            #legend.title = element_text(size=20),
+            #legend.key.width = unit(0.7, "in"),
+            #legend.key.height = unit(0.5, "in")) +
+      xlab("") + ylab("") + coord_fixed()
+corr_p
+```
+
+## UMAP visualization
+
+```{r}
+set.seed(123)
+umap_ind_poisson <- umap::umap((count_mat_ind_poisson))$layout
+umap_hpos_poisson <- umap::umap((count_mat_hpos_poisson))$layout
+colnames(umap_ind_poisson) <- c("UMAP1", "UMAP2")
+colnames(umap_hpos_poisson) <- c("UMAP1", "UMAP2")
+
+set.seed(123)
+clusters_ind_poisson <- kmeans(log((count_mat_ind_poisson)+1), centers=2)$cluster
+clusters_hpos_poisson <- kmeans(log((count_mat_hpos_poisson)+1), centers=2)$cluster
+
+umap_ind_poisson <- as_tibble(umap_ind_poisson) %>% dplyr::mutate(cluster = as.factor(clusters_ind_poisson), setting = "gene-gene ind")
+umap_hpos_poisson <- as_tibble(umap_hpos_poisson) %>%  dplyr::mutate(cluster = as.factor(clusters_hpos_poisson), setting = "half gene-gene cor")
+
+umap_tbl <- bind_rows(umap_ind_poisson, umap_hpos_poisson) %>% dplyr::mutate(setting = factor(setting, levels = c("gene-gene ind", "half gene-gene cor")))
+
+p_umap <- umap_tbl %>% ggplot(aes(x = UMAP1, y = UMAP2, color = cluster)) + geom_point(size = 1, alpha = 0.5) + facet_wrap(~setting) + theme(aspect.ratio = 1) + xlim(-7, 7) + ylim(-7, 7)
+p_umap
+```
+```{r, fig.width=5, fig.height=4}
+p_data <- cowplot::plot_grid(corr_p, p_umap, align = c("hv"), axis = c("none"), nrow = 2)
+p_data
+```
+```{r}
+ggsave2(filename = "~/ClusterDE/figure/naive_simu_data.png", plot = p_data, device = "png", width = 7, height = 5)
+```
+
+
+## Plot p-value
+```{r}
+pvalue_ind_poisson <- readRDS("~/ClusterDE/data/naive_simulation/pvalue_ind_poisson.rds")
+pvalue_hpos_poisson <- readRDS("~/ClusterDE/data/naive_simulation/pvalue_hpos_poisson.rds")
+res_tbl_poisson <- bind_rows(pvalue_ind_poisson, pvalue_hpos_poisson) %>% dplyr::mutate(ind = if_else(ind == "gene-gene corr", "half gene-gene cor", ind),
+  Method = if_else(Method == "cellsplit", "cell split", if_else(Method == "genesplit", "gene split", if_else(Method == "countsplit", "count split", Method)))) %>% dplyr::mutate(ind = factor(ind, levels = c("gene-gene ind", "half gene-gene cor")), Method = factor(Method, levels = c("naive", "cell split", "gene split", "count split"))) %>% dplyr::mutate(batch = rep(rep(c(1:100), each = 400), 2))
+p_simu <- res_tbl_poisson  %>% dplyr::filter(batch == 1) %>% ggplot(aes(x = pvalue)) + geom_histogram(color = "black", fill = "white", bins = 10) + facet_grid(rows = vars(ind), cols = vars(Method)) + theme(aspect.ratio = 1)
+p_simu
+```
+
+Add KS p-value
+```{r}
+dat_text <- res_tbl_poisson %>% dplyr::filter(batch == 1) %>%  dplyr::group_by(Method, ind) %>% dplyr::summarise(ks.p = ks.test(pvalue, "qunif")$p.value) %>% dplyr::mutate(label = paste0("ks-p=", format(ks.p, digits = 3, scientific = TRUE))) %>% dplyr::select(Method, ind, label)%>% data.frame()
+p_simu <- p_simu + geom_text(data = dat_text, mapping = aes(x = 0.5, y = Inf, label = label), vjust = 1.5) + ylab(NULL)
+p_simu
+```
+```{r}
+ggsave2(filename = "~/ClusterDE/figure/naive_simu_pvalue.png", plot = p_simu, device = "png", width = 8, height = 4)
+```
+
+
+## Pairwise correlation of count split
+```{r}
+set.seed(123)
+X <- t(simu_hpos_poisson[[1]])
+  split <- countsplit(X, epsilon=0.5)
+  Xtrain <- split$train
+  Xtest <- split$test
+pair_dat <- data.frame(Gene1_train = as.vector(Xtrain[, 1]), Gene1_test = as.vector(Xtest[, 1]),
+           Gene2_train = as.vector(Xtrain[, 2]), Gene2_test = as.vector(Xtest[, 2]),
+           Gene3_train = as.vector(Xtrain[, 3]), Gene3_test = as.vector(Xtest[, 3]))
+p_pair <- ggpairs(pair_dat)
+p_pair
+```
+
+```{r}
+ggsave2(filename = "~/ClusterDE/figure/countsplit_p_pair.png", plot = p_pair, device = "png", width = 8, height = 8)
+```
+
+
+## FDR plot
+```{r}
+res_tbl_poisson %>%  dplyr::group_by(Method, ind, batch) %>% dplyr::mutate(qvalue = p.adjust(pvalue, method = "BH")) %>% dplyr::filter(qvalue < 0.05) %>% dplyr::summarise(n())
+```
+

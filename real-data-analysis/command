@@ -1,0 +1,18 @@
+conda activate /u/project/halperin/johnsonc/TCAx/envs4
+cd /u/project/halperin/johnsonc/Integrate_CCA/Notebook/PoissonThin/
+
+Rscript calc-overdisperse.r pbmc seurat_clusters bool hvg 
+Rscript calc-overdisperse.r pbmc seurat_clusters bool random 
+Rscript calc-overdisperse.r pbmc seurat_clusters pcs hvg 
+Rscript calc-overdisperse.r pbmc seurat_clusters pcs random 
+
+Rscript calc-overdisperse.r hpc seurat_clusters bool hvg 
+Rscript calc-overdisperse.r hpc seurat_clusters bool random 
+Rscript calc-overdisperse.r hpc seurat_clusters pcs hvg 
+Rscript calc-overdisperse.r hpc seurat_clusters pcs random 
+
+Rscript calc-overdisperse.r amy seurat_clusters bool hvg  
+Rscript calc-overdisperse.r amy seurat_clusters bool random 
+Rscript calc-overdisperse.r amy seurat_clusters pcs hvg 
+Rscript calc-overdisperse.r amy seurat_clusters pcs random 
+

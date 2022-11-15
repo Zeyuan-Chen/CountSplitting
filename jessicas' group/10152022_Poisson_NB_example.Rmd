@@ -1,0 +1,284 @@
+---
+title: "10152022_Poisson_NB_example"
+author: "Dongyuan Song"
+date: "2022-10-15"
+output: html_document
+---
+
+```{r}
+rm(list = ls())
+library(useful)
+# library(scDesign2)
+library(scDesign3)
+library(SingleCellExperiment)
+library(umap)
+library(irlba)
+library(Seurat)
+library(SeuratObject)
+library(Rtsne)
+library(Clipper)
+library(DESeq2)
+library(edgeR)
+library(parallel)
+library(precrec)
+library(ggplot2)
+library(ggpubr)
+library(MAST)
+library(ggh4x)
+library(cowplot)
+library(tidyverse)
+library(grid)
+library(RColorBrewer)
+library(ggplotify)
+library(pheatmap)
+theme_set(theme_bw())
+```
+
+In this file, we simulate simple multivariate Poisson and NB data to check: if sample split, gene split, and count split work.
+
+```{r}
+n_gene <- 100
+sce <- readRDS("~/ClusterDE/data/real/jukart_sce.rds")
+gene_expr <- rowMeans(counts(sce))
+sce <- sce[order(gene_expr, decreasing = TRUE)[1:n_gene], ]
+```
+
+### Construct marginal
+
+```{r}
+n_cell <- 1000
+
+my_data <- construct_data(sce = sce, assay_use = "counts", celltype = "cell_type", pseudotime = NULL, spatial = NULL, other_covariates = NULL, ncell = n_cell, corr_by = 1) 
+
+my_marginal_nb <- fit_marginal(data = my_data, mu_formula = "1", sigma_formula = "1", family_use = "nb", n_cores = 1, usebam = FALSE)
+
+my_marginal_poisson <- fit_marginal(data = my_data, mu_formula = "1", sigma_formula = "1", family_use = "poisson", n_cores = 1, usebam = FALSE)
+```
+
+### Construct correlation
+```{r}
+cor_mat_ind <- diag(n_gene)
+
+cor_mat_pos <- toeplitz((n_gene:1)/n_gene)
+
+cor_mat_hpos <- diag(n_gene)
+cor_mat_hpos[1:round(n_gene/2), 1:round(n_gene/2)] <- cor_mat_pos[1:round(n_gene/2), 1:round(n_gene/2)]
+
+matrixcalc::is.positive.semi.definite(cor_mat_hpos)
+```
+```{r, fig.width=5, fig.height=5}
+pheatmap(cor_mat_hpos, cluster_rows = FALSE, cluster_cols = FALSE)
+```
+
+```{r}
+my_para_nb <- extract_para(sce = sce, marginal_list = my_marginal_nb, n_cores = 1, family_use = "nb", new_covariate = my_data$newCovariate)
+my_para_poisson <- extract_para(sce = sce, marginal_list = my_marginal_poisson, n_cores = 1, family_use = "poisson", new_covariate = my_data$newCovariate)
+```
+
+### Simulate data
+```{r}
+simu1 <- simu_new(sce = sce, mean_mat = my_para_nb$mean_mat, sigma_mat = my_para_nb$sigma_mat, zero_mat = my_para_nb$zero_mat, copula_list = list(cor_mat_hpos), n_cores = 1, family_use = "nb", input_data = my_data$dat, new_covariate = my_data$newCovariate)
+
+simu1 <- umap(t(simu1))
+plot(simu1$layout)
+```
+
+```{r}
+simu2 <- simu_new(sce = sce, mean_mat = my_para_poisson$mean_mat, sigma_mat = my_para_poisson$sigma_mat, zero_mat = my_para_poisson$zero_mat, copula_list = list(cor_mat_hpos), n_cores = 1, family_use = "poisson", input_data = my_data$dat, new_covariate = my_data$newCovariate)
+
+simu2 <- umap(t(simu2))
+plot(simu2$layout)
+```
+
+```{r, message=FALSE}
+simu_ind_nb <- lapply(1:100, function(seed) {
+  set.seed(seed)
+  simu_new(sce = sce, mean_mat = my_para_nb$mean_mat, sigma_mat = my_para_nb$sigma_mat, zero_mat = my_para_nb$zero_mat, copula_list = list(cor_mat_ind), n_cores = 1, family_use = "nb", input_data = my_data$dat, new_covariate = my_data$newCovariate)
+})
+saveRDS(simu_ind_nb, file = "~/ClusterDE/data/naive_simulation/simu_ind_nb.rds")
+```
+
+```{r, message=FALSE}
+simu_ind_poisson <- lapply(1:100, function(seed) {
+  set.seed(seed)
+  simu_new(sce = sce, mean_mat = my_para_poisson$mean_mat, sigma_mat = my_para_poisson$sigma_mat, zero_mat = my_para_poisson$zero_mat, copula_list = list(cor_mat_ind), n_cores = 1, family_use = "poisson", input_data = my_data$dat, new_covariate = my_data$newCovariate)
+})
+saveRDS(simu_ind_poisson, file = "~/ClusterDE/data/naive_simulation/simu_ind_poisson.rds")
+```
+
+```{r, message=FALSE}
+simu_hpos_nb <- lapply(1:100, function(seed) {
+  set.seed(seed)
+  simu_new(sce = sce, mean_mat = my_para_nb$mean_mat, sigma_mat = my_para_nb$sigma_mat, zero_mat = my_para_nb$zero_mat, copula_list = list(cor_mat_hpos), n_cores = 1, family_use = "nb", input_data = my_data$dat, new_covariate = my_data$newCovariate)
+})
+saveRDS(simu_hpos_nb, file = "~/ClusterDE/data/naive_simulation/simu_hpos_nb.rds")
+
+simu_hpos_poisson <- lapply(1:100, function(seed) {
+  set.seed(seed)
+  simu_new(sce = sce, mean_mat = my_para_poisson$mean_mat, sigma_mat = my_para_poisson$sigma_mat, zero_mat = my_para_poisson$zero_mat, copula_list = list(cor_mat_hpos), n_cores = 1, family_use = "poisson", input_data = my_data$dat, new_covariate = my_data$newCovariate)
+})
+saveRDS(simu_hpos_poisson, file = "~/ClusterDE/data/naive_simulation/simu_hpos_poisson.rds")
+```
+
+
+## Clustering and DE
+```{r}
+GetPvalue <- function(count_mat, method = c("naive", "cellsplit", "genesplit", "countsplit"), dist_family = c("poisson", "nb")) {
+  
+  X <- as.matrix(t(count_mat))
+  
+  if (method == "naive") {
+    
+    clusters <- kmeans(log(X+1), centers=2)$cluster
+    p.results <- t(apply(X, 2, function(u) summary(mgcv::gam(u~as.factor(clusters), family=dist_family))$p.table[2,4]))
+  } else if (method == "cellsplit") {
+    
+    index_all <- seq_len(dim(X)[1])
+    index_train <- sample(index_all, round(dim(X)[1]/2), replace = FALSE)
+    X.train <- X[index_train, ]
+    X.test <- X[-index_train, ]
+
+    clusters.train <- kmeans(log(X.train+1), centers=2)$cluster
+    data_train <- data.frame(Cluster = factor(clusters.train), X.train)
+    
+    ctrl <- trainControl(method = "repeatedcv", repeats = 3)
+    set.seed(123)
+    rfFit <- train(
+      Cluster ~ .,
+      data = data_train,
+      method = "svmRadial",
+      ## Center and scale the predictors for the training
+      ## set and all future samples.
+      preProc = NULL,
+      trControl = ctrl
+    )
+    
+    ## Project labels on null data
+    clusters.test <- predict(rfFit, newdata = X.test)
+    p.results <- t(apply(X.test, 2, function(u) summary(mgcv::gam(u~as.factor(clusters.test), family=dist_family))$p.table[2,4]))
+    
+  } else if (method == "genesplit") {
+    p.results <- sapply(seq_len(dim(X)[2]), function(i) {
+      u <- as.vector(X[, i])
+      clusters <- kmeans(log(X[, -i]+1), centers=2)$cluster
+      summary(mgcv::gam(u~as.factor(clusters), family=dist_family))$p.table[2,4]
+    })
+  } else if (method == "countsplit") {
+    set.seed(2)
+  split <- countsplit(X, epsilon=0.5)
+  Xtrain <- split$train
+  Xtest <- split$test
+  clusters.train <- kmeans(log(Xtrain+1), centers=2)$cluster
+  p.results <- t(apply(Xtest, 2, function(u) summary(mgcv::gam(u~as.factor(clusters.train), family=dist_family))$p.table[2,4]))
+  } else {
+    stop("The method must be one of naive, cellsplit, genesplit, countsplit")
+  }
+  p.results <- as.vector(p.results)
+  return(p.results)
+}
+```
+
+
+```{r}
+count_mat <- simu_ind_poisson[[1]]
+p_naive <- GetPvalue(count_mat = count_mat, method = "naive", dist_family = "poisson")
+p_cellsplit <- GetPvalue(count_mat = count_mat, method = "cellsplit", dist_family = "poisson")
+p_genesplit <- GetPvalue(count_mat = count_mat, method = "genesplit", dist_family = "poisson")
+p_countsplit <- GetPvalue(count_mat = count_mat, method = "countsplit", dist_family = "poisson")
+
+res_tbl_ind_poisson <- tibble(naive = p_naive, cellsplit = p_cellsplit, genesplit = p_genesplit, countsplit = p_countsplit, distr = "poisson", batch = 1, ind = "gene-gene ind", gene = paste0("Gene", seq_len(length(p_naive))))
+res_tbl_ind_poisson <- res_tbl_ind_poisson %>% tidyr::pivot_longer(-c("distr", "batch", "ind", "gene"), names_to = "Method", values_to = "pvalue")
+
+res_tbl_ind_poisson
+```
+```{r}
+count_mat <- simu_hpos_poisson[[1]]
+p_naive <- GetPvalue(count_mat = count_mat, method = "naive", dist_family = "poisson")
+p_cellsplit <- GetPvalue(count_mat = count_mat, method = "cellsplit", dist_family = "poisson")
+p_genesplit <- GetPvalue(count_mat = count_mat, method = "genesplit", dist_family = "poisson")
+p_countsplit <- GetPvalue(count_mat = count_mat, method = "countsplit", dist_family = "poisson")
+
+res_tbl_cor_poisson <- tibble(naive = p_naive, cellsplit = p_cellsplit, genesplit = p_genesplit, countsplit = p_countsplit, distr = "poisson", batch = 1, ind = "gene-gene cor", gene = paste0("Gene", seq_len(length(p_naive))))
+res_tbl_cor_poisson <- res_tbl_cor_poisson %>% tidyr::pivot_longer(-c("distr", "batch", "ind", "gene"), names_to = "Method", values_to = "pvalue")
+
+res_tbl_cor_poisson
+```
+
+```{r}
+res_tbl_poisson <- bind_rows(res_tbl_ind_poisson, res_tbl_cor_poisson) %>% dplyr::mutate(ind = factor(ind, levels = c("gene-gene ind", "gene-gene cor")), Method = factor(Method, levels = c("naive", "cellsplit", "genesplit", "countsplit")))
+```
+
+```{r}
+p_simu <- res_tbl_poisson %>% ggplot(aes(x = pvalue)) + geom_histogram(color = "black", fill = "white", bins = 10) + facet_grid(rows = vars(ind), cols = vars(Method)) + theme(aspect.ratio = 1)
+p_simu
+ggsave2(filename = "~/ClusterDE/figure/p_simu.png", p_simu, device = "png", width = 8, height = 4)
+```
+
+
+
+
+```{r}
+system.time(res <- GetPvalue(count_mat = simu_ind_poisson[[1]], method = "genesplit", dist_family = "poisson"))
+#res
+
+hist(res, breaks = 10, main = "genesplit, ind")
+ks.test(res,"punif", 0, 1)
+```
+```{r}
+system.time(res <- GetPvalue(count_mat = simu_hpos_poisson[[1]], method = "genesplit", dist_family = "poisson"))
+#res
+
+hist(res, breaks = 10, main = "genesplit, corr")
+ks.test(res,"punif", 0, 1)
+```
+
+```{r}
+system.time(res <- GetPvalue(count_mat = simu_ind_poisson[[1]], method = "countsplit", dist_family = "poisson"))
+#res
+
+hist(res, breaks = 10, main = "countsplit, ind")
+ks.test(res,"punif", 0, 1)
+```
+```{r}
+system.time(res <- GetPvalue(count_mat = simu_hpos_poisson[[1]], method = "countsplit", dist_family = "poisson"))
+#res
+
+hist(res, breaks = 10, main = "countsplit, corr")
+ks.test(res,"punif", 0, 1)
+```
+```{r}
+system.time(res <- GetPvalue(count_mat = simu_ind_nb[[2]], method = "countsplit", dist_family = "nb"))
+#res
+
+hist(res, breaks = 10, main = "countsplit, ind")
+ks.test(res,"punif", 0, 1)
+```
+
+```{r}
+library(MASS)
+library(fitdistrplus)
+hist(simu_ind_nb[[1]][1, ])
+fit_w <- fitdistrplus::fitdist(simu_ind_nb[[1]][100, ], distr = "pois")
+fit_g <- fitdistrplus::fitdist(simu_ind_nb[[1]][100, ], distr = "nbinom")
+
+denscomp(list(fit_w, fit_g))
+cdfcomp (list(fit_w, fit_g))
+qqcomp  (list(fit_w, fit_g))
+ppcomp  (list(fit_w, fit_g))
+```
+
+```{r}
+pvalue_ind_poisson %>% dplyr::filter(gene == "Gene2") %>% ggplot(aes(x = pvalue)) + geom_histogram(color = "black", fill = "white", bins = 20) + facet_grid(rows = vars(ind), cols = vars(Method)) + theme(aspect.ratio = 1) 
+```
+
+```{r}
+set.seed(123)
+X <- t(simu_hpos_poisson[[1]])
+  split <- countsplit(X, epsilon=0.5)
+  Xtrain <- split$train
+  Xtest <- split$test
+plot(as.vector(Xtrain[, 1]), as.vector(Xtest[, 1]))
+cor(as.vector(Xtrain[, 1]), as.vector(Xtest[, 2]))
+cor(as.vector(Xtest[, 1]), as.vector(Xtest[, 2]))
+```
+
